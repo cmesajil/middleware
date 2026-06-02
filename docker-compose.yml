@@ -1,0 +1,69 @@
+services:
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  mariadb:
+    image: mariadb:latest
+    container_name: mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+
+  mysql:
+    image: mysql:latest
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    environment:
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5433:5432"
+
+  usuarios:
+    build: ./backend-usuarios
+    depends_on:
+      - rabbitmq
+      - mariadb
+
+  textos:
+    build: ./backend-textos
+    depends_on:
+      - rabbitmq
+      - mysql
+
+  correos:
+    build: ./backend-correos
+    depends_on:
+      - rabbitmq
+      - postgres
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_PORT: 5432
+      RABBIT_HOST: rabbitmq
+
+  ia:
+    build: ./nodo-ia
+    depends_on:
+      - rabbitmq
+
+  cliente:
+    build: ./cliente
+    stdin_open: true
+    tty: true
+    depends_on:
+      - rabbitmq
