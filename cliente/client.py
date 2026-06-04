@@ -1,113 +1,88 @@
-import threading
 import pika
 import json
 import uuid
+import threading
 import time
 
 CLIENT_ID = str(uuid.uuid4())
 
-EXCHANGE = "solicitudes"
-RESPONSE_QUEUE = f"respuesta.{CLIENT_ID}"
+OPCIONES = {
+    "1": "Solicitud de préstamo",
+    "2": "Consulta de préstamo",
+    "3": "Evaluación de préstamo",
+    "4": "Aviso de meses no pagados",
+    "5": "Aviso de término de pago",
+    "6": "Refinanciamiento"
+}
 
 
-def conectar_rabbit():
+def conectar():
     while True:
         try:
-            connection = pika.BlockingConnection(
-                pika.ConnectionParameters(host="rabbitmq", heartbeat=600)
+            return pika.BlockingConnection(
+                pika.ConnectionParameters(host="rabbitmq")
             )
-            print("Conectado a RabbitMQ")
-            return connection
-        except Exception as e:
-            print("Esperando RabbitMQ...", e)
-            time.sleep(3)
+        except Exception:
+            time.sleep(2)
 
 
-# =========================
-# LISTENER
-# =========================
+# ================= RECEIVER =================
 def escuchar():
-    connection = conectar_rabbit()
-    channel = connection.channel()
+    conn = conectar()
+    ch = conn.channel()
 
-    channel.queue_declare(
-        queue=RESPONSE_QUEUE,
-        exclusive=True,
-        auto_delete=True
-    )
+    queue = f"respuesta.{CLIENT_ID}"
+    ch.queue_declare(queue=queue)
 
     def callback(ch, method, properties, body):
-        try:
-            mensaje = json.loads(body)
-            print("\nRESPUESTA:")
-            print(json.dumps(mensaje, indent=4))
-            print("> ", end="", flush=True)
-        except Exception as e:
-            print("Error respuesta:", e)
+        print("\n========== RESPUESTA IA ==========")
+        print(json.loads(body))
+        print("==================================")
 
-    channel.basic_consume(
-        queue=RESPONSE_QUEUE,
+    ch.basic_consume(
+        queue=queue,
         on_message_callback=callback,
         auto_ack=True
     )
 
-    print("Escuchando respuestas...")
-    channel.start_consuming()
+    ch.start_consuming()
 
 
-# =========================
-# SENDER
-# =========================
+# ================= SENDER =================
 def enviar():
-    connection = conectar_rabbit()
-    channel = connection.channel()
+    conn = conectar()
+    ch = conn.channel()
 
-    # exchange (SIN CONFLICTOS)
-    channel.exchange_declare(
-        exchange=EXCHANGE,
-        exchange_type="direct"
-    )
+    ch.queue_declare(queue="cola.main")
 
     while True:
-        print("\n1 Usuarios")
-        print("2 Textos")
-        print("3 Correos")
-        print("0 Salir")
 
-        opcion = input("> ")
+        print("\nSeleccione una opción:")
+        for k, v in OPCIONES.items():
+            print(f"{k}. {v}")
 
-        if opcion == "0":
-            break
+        opcion = input("\nOpción: ").strip()
 
-        routing = {
-            "1": "usuarios",
-            "2": "textos",
-            "3": "correos"
-        }.get(opcion)
-
-        if not routing:
+        if opcion not in OPCIONES:
+            print("Opción inválida")
             continue
 
-        texto = input("Mensaje: ")
+        mensaje = input("Mensaje: ")
 
-        mensaje = {
+        data = {
             "client_id": CLIENT_ID,
-            "contenido": texto
+            "tipo": OPCIONES[opcion],
+            "contenido": mensaje
         }
 
-        channel.basic_publish(
-            exchange=EXCHANGE,
-            routing_key=routing,
-            body=json.dumps(mensaje)
+        ch.basic_publish(
+            exchange="",
+            routing_key="cola.main",
+            body=json.dumps(data)
         )
 
-        print("Enviado ✔")
+        print("Enviado")
 
 
-# =========================
-# MAIN
-# =========================
-if __name__ == "__main__":
-    threading.Thread(target=escuchar, daemon=True).start()
-    time.sleep(1)
-    enviar()
+threading.Thread(target=escuchar, daemon=True).start()
+enviar()
