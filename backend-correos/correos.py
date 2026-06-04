@@ -15,7 +15,6 @@ REGEX_MONTO = r'(?:prestamo|préstamo|credito|crédito|monto|s\/\.|\$)\s*(?:de\s
 # ================= DB =================
 
 def obtener_prestamo(cursor, id_usuario):
-
     cursor.execute(
         """
         SELECT
@@ -31,11 +30,9 @@ def obtener_prestamo(cursor, id_usuario):
         """,
         (id_usuario,)
     )
-
     return cursor.fetchone()
 
 def crear_prestamo(cursor, id_usuario, monto):
-
     fecha_inicio = datetime.now()
     fecha_fin = fecha_inicio + timedelta(days=365)
 
@@ -60,7 +57,7 @@ def crear_prestamo(cursor, id_usuario, monto):
         """,
         (
             id_usuario,
-            monto,
+            monto if monto is not None else 0.0, # Salvaguarda por si llega nulo
             12.5,
             12,
             "PENDIENTE",
@@ -69,10 +66,10 @@ def crear_prestamo(cursor, id_usuario, monto):
             "PERSONAL"
         )
     )
-
     return cursor.fetchone()[0]
 
 def get_conn():
+    # Apuntamos a la base de datos correcta creada por tu init.sql
     return psycopg2.connect(
         host="postgres",
         database="postgres",
@@ -81,9 +78,7 @@ def get_conn():
         port=5432
     )
 
-
 def buscar_usuario(cursor, dni=None, correo=None):
-
     if correo and dni:
         cursor.execute(
             """
@@ -95,7 +90,6 @@ def buscar_usuario(cursor, dni=None, correo=None):
             """,
             (correo, dni)
         )
-
     elif correo:
         cursor.execute(
             """
@@ -106,7 +100,6 @@ def buscar_usuario(cursor, dni=None, correo=None):
             """,
             (correo,)
         )
-
     elif dni:
         cursor.execute(
             """
@@ -117,15 +110,11 @@ def buscar_usuario(cursor, dni=None, correo=None):
             """,
             (dni,)
         )
-
     else:
         return None
-
     return cursor.fetchone()
 
-
 def actualizar_datos_faltantes(cursor, id_usuario, dni, correo):
-
     if dni:
         cursor.execute(
             """
@@ -135,7 +124,6 @@ def actualizar_datos_faltantes(cursor, id_usuario, dni, correo):
             """,
             (dni, id_usuario)
         )
-
     if correo:
         cursor.execute(
             """
@@ -146,9 +134,7 @@ def actualizar_datos_faltantes(cursor, id_usuario, dni, correo):
             (correo, id_usuario)
         )
 
-
 def crear_usuario(cursor, dni, correo):
-
     cursor.execute(
         """
         INSERT INTO usuarios
@@ -160,26 +146,15 @@ def crear_usuario(cursor, dni, correo):
         )
         VALUES
         (
-            %s,
-            %s,
-            %s,
-            %s
+            %s, %s, %s, %s
         )
         RETURNING id_usuario
         """,
-        (
-            "Cliente Nuevo",
-            dni,
-            correo,
-            datetime.now()
-        )
+        ("Cliente Nuevo", dni, correo, datetime.now())
     )
-
     return cursor.fetchone()[0]
 
-
 def crear_cuenta(cursor, id_usuario):
-
     cursor.execute(
         """
         INSERT INTO cuentas
@@ -192,27 +167,15 @@ def crear_cuenta(cursor, id_usuario):
         )
         VALUES
         (
-            %s,
-            %s,
-            %s,
-            NOW(),
-            %s
+            %s, %s, %s, NOW(), %s
         )
         RETURNING id_cuenta
         """,
-        (
-            id_usuario,
-            0,
-            "ACTIVA",
-            "AHORRO"
-        )
+        (id_usuario, 0, "ACTIVA", "AHORRO")
     )
-
     return cursor.fetchone()[0]
 
-
 def obtener_cuenta(cursor, id_usuario):
-
     cursor.execute(
         """
         SELECT
@@ -226,12 +189,9 @@ def obtener_cuenta(cursor, id_usuario):
         """,
         (id_usuario,)
     )
-
     return cursor.fetchone()
 
-
 def guardar_mensaje(cursor, id_usuario, contenido, tipo):
-
     cursor.execute(
         """
         INSERT INTO mensajes_texto
@@ -244,26 +204,15 @@ def guardar_mensaje(cursor, id_usuario, contenido, tipo):
         )
         VALUES
         (
-            %s,
-            %s,
-            NOW(),
-            %s,
-            %s
+            %s, %s, NOW(), %s, %s
         )
         """,
-        (
-            id_usuario,
-            contenido,
-            tipo,
-            "RABBITMQ"
-        )
+        (id_usuario, contenido, tipo, "RABBITMQ")
     )
-
 
 # ================= RABBIT =================
 
 def conectar_rabbit():
-
     while True:
         try:
             return pika.BlockingConnection(
@@ -273,7 +222,6 @@ def conectar_rabbit():
             print("Esperando RabbitMQ...", e)
             time.sleep(2)
 
-
 connection = conectar_rabbit()
 channel = connection.channel()
 
@@ -281,7 +229,6 @@ channel.queue_declare(queue="cola.main")
 channel.queue_declare(queue="cola.ia")
 
 print("Backend conectado a RabbitMQ")
-
 
 # ================= CALLBACK =================
 
@@ -297,8 +244,7 @@ def callback(ch, method, properties, body):
     tipo = msg.get("tipo", "GENERAL")
     queue_respuesta = f"respuesta.{client_id}"
 
-    # Asegurar que la cola de respuesta exista antes de cualquier excepción
-    channel.queue_declare(queue=queue_respuesta)
+    ch.queue_declare(queue=queue_respuesta)
 
     correo_match = re.search(REGEX_CORREO, contenido)
     dni_match = re.search(REGEX_DNI, contenido)
@@ -307,6 +253,9 @@ def callback(ch, method, properties, body):
     correo = correo_match.group(0) if correo_match else None
     dni = dni_match.group(0) if dni_match else None
     monto = float(monto_match.group(1)) if monto_match else None
+
+    # Tipos de transacciones que requieren obligatoriamente un monto numérico
+    TIPOS_CON_MONTO_OBLIGATORIO = ["Solicitud de préstamo", "Refinanciamiento"]
 
     try:
         conn = get_conn()
@@ -320,25 +269,27 @@ def callback(ch, method, properties, body):
                 "estado": "ERROR",
                 "mensaje": "No pudimos identificar quién eres. Por favor, vuelve a enviar tu mensaje incluyendo tu DNI o Correo."
             }
-            channel.basic_publish(exchange="", routing_key=queue_respuesta, body=json.dumps(respuesta))
+            ch.basic_publish(exchange="", routing_key=queue_respuesta, body=json.dumps(respuesta))
             print("[ALERTA] Falta DNI o Correo. Respuesta enviada al cliente.")
             cursor.close()
             conn.close()
-            return # <--- CORRECCIÓN: Detiene el flujo aquí.
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
 
         # ====================================
-        # VALIDACIÓN 2: VALIDA MONTO
+        # VALIDACIÓN 2: VALIDA MONTO (FLEXIBILIZADA)
         # ====================================
-        elif monto is None:
+        elif monto is None and tipo in TIPOS_CON_MONTO_OBLIGATORIO:
             respuesta = {
                 "estado": "PENDIENTE",
-                "mensaje": "Hemos validado tus datos de perfil, pero requerimos que indiques el monto solicitado. Ejemplo: préstamo de 5000"
+                "mensaje": f"Para procesar una '{tipo}', requerimos que indiques el monto solicitado en el texto. Ejemplo: monto 5000"
             }
-            channel.basic_publish(exchange="", routing_key=queue_respuesta, body=json.dumps(respuesta))
-            print("[ALERTA] Falta Monto. Respuesta enviada al cliente.")
+            ch.basic_publish(exchange="", routing_key=queue_respuesta, body=json.dumps(respuesta))
+            print(f"[ALERTA] Falta Monto para tipo '{tipo}'. Respuesta enviada al cliente.")
             cursor.close()
             conn.close()
-            return # <--- CORRECCIÓN: Detiene el flujo aquí.
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
 
         # ====================================
         # PROCESAMIENTO DE SOLICITUD
@@ -366,14 +317,15 @@ def callback(ch, method, properties, body):
                     "estado": prestamo[4]
                 }
             else:
-                id_prestamo = crear_prestamo(cursor, id_usuario, monto)
+                # Si no tiene préstamo previo y no mandó monto, se inicializa por defecto en 0.0
+                id_prestamo = crear_prestamo(cursor, id_usuario, monto if monto is not None else 0.0)
                 datos_prestamo = {
                     "id_prestamo": id_prestamo,
-                    "monto": monto,
+                    "monto": monto if monto is not None else 0.0,
                     "estado": "PENDIENTE"
                 }
 
-            conn.commit() # Commit unificado al final del bloque exitoso
+            conn.commit()
 
             respuesta = {
                 "estado": "OK",
@@ -394,12 +346,12 @@ def callback(ch, method, properties, body):
         else:
             id_usuario = crear_usuario(cursor, dni, correo)
             id_cuenta = crear_cuenta(cursor, id_usuario)
-            id_prestamo = crear_prestamo(cursor, id_usuario, monto)
+            id_prestamo = crear_prestamo(cursor, id_usuario, monto if monto is not None else 0.0)
             guardar_mensaje(cursor, id_usuario, contenido, tipo)
 
             cuenta = obtener_cuenta(cursor, id_usuario)
 
-            conn.commit() # Commit una vez que todo el set de inserciones terminó sin errores
+            conn.commit()
 
             respuesta = {
                 "estado": "OK",
@@ -413,7 +365,7 @@ def callback(ch, method, properties, body):
                 },
                 "prestamo": {
                     "id_prestamo": id_prestamo,
-                    "monto": monto,
+                    "monto": monto if monto is not None else 0.0,
                     "estado": "PENDIENTE"
                 }
             }
@@ -431,14 +383,14 @@ def callback(ch, method, properties, body):
         }
 
         # Notificar al nodo de IA
-        channel.basic_publish(
+        ch.basic_publish(
             exchange="",
             routing_key="cola.ia",
             body=json.dumps(mensaje_ia)
         )
 
         # Notificar la respuesta exitosa al cliente
-        channel.basic_publish(
+        ch.basic_publish(
             exchange="",
             routing_key=queue_respuesta,
             body=json.dumps(respuesta)
@@ -448,12 +400,11 @@ def callback(ch, method, properties, body):
         cursor.close()
         conn.close()
 
-        # ANTES DE SALIR DEL TRY: Envías la confirmación manual a RabbitMQ
+        # Confirmación manual a RabbitMQ
         ch.basic_ack(delivery_tag=method.delivery_tag)
-        print("Procesamiento exitoso. Mensaje confirmado en RabbitMQ.")
 
     except Exception as e:
-        print("ERROR:", e)
+        print("ERROR BACKEND:", e)
         try:
             conn.rollback()
         except:
@@ -464,29 +415,28 @@ def callback(ch, method, properties, body):
             "mensaje": f"Ocurrió un error interno en el servidor: {str(e)}"
         }
 
-        channel.basic_publish(
-            exchange="",
-            routing_key=queue_respuesta,
-            body=json.dumps(respuesta)
-        )
+        try:
+            ch.basic_publish(
+                exchange="",
+                routing_key=queue_respuesta,
+                body=json.dumps(respuesta)
+            )
+        except:
+            pass
 
-        # EN CASO DE ERROR: También confirmamos (o rechazamos con basic_nack)
-        # para que la cola no se quede trabada con un mensaje corrupto
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-
-
-
-
+        # Usamos ch de forma segura para confirmar y evitar bucles de re-procesamiento
+        try:
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except:
+            pass
 
 # ================= START =================
 
 channel.basic_consume(
     queue="cola.main",
     on_message_callback=callback,
-    auto_ack=False # <--- CAMBIADO A FALSE (Ahora confirmas manualmente arriba)
+    auto_ack=False
 )
 
 print("Backend listo y escuchando cola.main")
-
 channel.start_consuming()
